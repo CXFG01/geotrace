@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GeoTrace</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+:root{--bg:#0e1116;--card:#171c24;--line:#262d38;--tx:#e8ecf2;--mut:#8b96a8;--ok:#3ecf8e;--warn:#f5b84b;--bad:#ef5b5b;--acc:#6ea8ff}
+@media (prefers-color-scheme:light){:root{--bg:#f4f6fa;--card:#fff;--line:#dde3ec;--tx:#141a24;--mut:#5d6b80}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+.wrap{max-width:1180px;margin:0 auto;padding:18px 16px 60px}
+h1{font-size:26px;margin:0}h2{font-size:14px;margin:0 0 8px;color:var(--mut);font-weight:600;text-transform:uppercase;letter-spacing:.06em}
+.sub{color:var(--mut);margin:2px 0 16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
+.grid{display:grid;gap:12px}.trips{grid-template-columns:repeat(auto-fit,minmax(160px,1fr));margin-bottom:12px}
+.trip{cursor:pointer}.trip:hover{border-color:var(--acc)}.trip.sel{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc)}
+.trip b{font-size:16px}.m{color:var(--mut);font-size:13px}
+.two{grid-template-columns:1.25fr 1fr}@media(max-width:860px){.two{grid-template-columns:1fr}}
+#map{height:440px;border-radius:10px;border:1px solid var(--line)}
+.vid{background:#000;border-radius:8px;overflow:hidden}.vid video{width:100%;display:block}
+input[type=range]{width:100%}input[type=text]{background:var(--bg);color:var(--tx);border:1px solid var(--line);border-radius:8px;padding:8px 10px;width:100%}
+button{background:var(--acc);color:#0b1220;border:0;border-radius:8px;padding:8px 14px;font-weight:700;cursor:pointer}button.alt{background:var(--line);color:var(--tx)}
+.pill{display:inline-block;font-size:12px;padding:1px 9px;border:1px solid var(--line);border-radius:999px;color:var(--mut);margin:2px 4px 2px 0}
+.pill.ok{color:var(--ok);border-color:var(--ok)}.pill.bad{color:var(--bad);border-color:var(--bad)}.pill.tram{color:var(--warn);border-color:var(--warn)}
+.row{display:flex;justify-content:space-between;gap:8px;font-size:14px}.note{font-size:13px;color:var(--mut)}
+table{width:100%;border-collapse:collapse;font-size:14px}td,th{padding:4px 6px;border-bottom:1px solid var(--line);text-align:left}tr.click{cursor:pointer}tr.click:hover{background:var(--line)}
+svg text{fill:var(--mut);font-size:11px}
+.verdict{font-size:18px;font-weight:700;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>GeoTrace</h1>
+<div class="sub">Where was this dashcam clip recorded? Cosmos3-Reason reads street signs, turns, tram tracks and motion from the video. A distance-consistency solver then matches them to the OpenStreetMap road network, rejecting misreads.</div>
+<div id="trips" class="grid trips"></div>
+<div class="grid two">
+ <div class="card"><h2>Matched route</h2><div style="margin-bottom:8px"><button id="m1">Sign-matched route</button> <button class="alt" id="m2">Motion-consistent route</button></div><div id="map"></div><div class="note" id="mapnote" style="margin-top:6px"></div></div>
+ <div class="card"><h2>Clip at <span id="clock">0:00</span></h2>
+  <div class="vid"><video id="v" muted playsinline controls preload="auto"></video></div>
+  <input id="sc" type="range" min="0" value="0" style="margin-top:8px">
+  <div style="display:flex;gap:8px;margin:6px 0"><button id="play">Play trip</button><button class="alt" id="prev">&laquo; 5s</button><button class="alt" id="next">5s &raquo;</button></div>
+  <div id="evid"></div></div>
+</div>
+<div class="grid two" style="margin-top:12px">
+ <div class="card"><h2>Anchors used (click to jump)</h2><div id="anchors"></div></div>
+ <div class="card"><h2>Candidate places remaining</h2><div id="amb"></div><div class="note" id="ambnote"></div></div>
+</div>
+<div class="card" style="margin-top:12px"><h2>Verify a location claim</h2>
+ <div class="note">Claim: &ldquo;this clip was recorded at &hellip;&rdquo;. GeoTrace checks the claim against the footage-derived route.</div>
+ <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><input id="claim" type="text" placeholder="e.g. Bathurst St and Bloor St W, Toronto" style="flex:1;min-width:240px"><button id="verify">Verify</button></div>
+ <div style="margin-top:6px"><button class="alt" id="ex1">Example: true place</button> <button class="alt" id="ex2">Example: false place</button></div>
+ <div id="vres"></div></div>
+<div class="card" style="margin-top:12px"><h2>How to read this &mdash; and limits</h2>
+ <div class="note" id="held"></div>
+ <div class="note" style="margin-top:6px">City-scale (downtown Toronto road network), not world-scale. Turn sequences alone leave hundreds of candidate places; the text anchors are what makes the match unique. Held-out checks measure self-consistency, not GPS accuracy: there is no GPS ground truth in this dataset. Turn directions are not used for matching: a numpy optical-flow check confirmed 48 of the model's 87 labelled turns (7 contradicted), but the route between signs is too coarse to validate turn by turn. Model misreads (for example a street name seen on a distant sign) are rejected when they cannot fit the distance and time constraints. The same technique can reveal where footage was recorded, so this demo runs only on the provided dataset and is framed as claim verification.</div></div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+const BASE=location.pathname.endsWith('/')?location.pathname:location.pathname+'/';
+const el=(t,a={},h='')=>{const e=document.createElement(t);for(const k in a)e.setAttribute(k,a[k]);e.innerHTML=h;return e};
+const mmss=t=>Math.floor(t/60)+':'+String(Math.floor(t%60)).padStart(2,'0');
+let R,T,sel=0,cur=0,auto=false,map,routeL,route2L,anchorL,veh,claimL,mode=1;
+const $=id=>document.getElementById(id);
+fetch(BASE+'api/results').then(r=>r.json()).then(d=>{R=d;initMap();render()});
+function initMap(){map=L.map('map').setView([43.67,-79.4],13);L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}).addTo(map);anchorL=L.layerGroup().addTo(map);claimL=L.layerGroup().addTo(map)}
+function render(){
+ const box=$('trips');box.innerHTML='';
+ R.trips.forEach((t,i)=>{const l=t.loo||{};const c=el('div',{class:'card trip'+(i===sel?' sel':'')},`<b>${t.label}</b><div class="m">${t.anchors.length} anchors accepted of ${t.n_anchors}</div><div class="m">held-out median ${l.time_median_m??'n/a'} m</div>`);c.onclick=()=>{sel=i;cur=0;render()};box.appendChild(c)});
+ T=R.trips[sel];
+ $('sc').max=T.segs.length-1;
+ drawMap();drawAnchors();drawAmb();setSeg(0,true);
+ const l=T.loo||{};
+ const p=T.poi_summary||{};
+ $('held').innerHTML=`<b>${T.label}:</b> ${T.reads} street-name reads &rarr; ${T.anchors.length} anchors accepted, ${T.rejected.length} rejected as inconsistent. <b>Hold-one-sign-out test</b> (hide a sign, predict where the car is at that moment from the rest): median error ${l.time_median_m??'n/a'} m, ${l.time_within300??'?'} of ${l.time_n??'?'} within 300 m. <b>Independent check</b> with business names read in the video (never used in matching, geocoded with OpenStreetMap): ${p.w300??'?'} of ${p.n??'?'} within 300 m of the matched position at the time they were read. <b>Second-model check</b> (Nemotron-3.5-Super-VL-120B looks at each clip&rsquo;s frames): confirms ${T.verify.acc_ok} of ${T.verify.acc} accepted signs but only ${T.verify.rej_ok} of ${T.verify.rej} rejected ones (all trips: ${R.meta.verify.acc_ok}/${R.meta.verify.acc} vs ${R.meta.verify.rej_ok}/${R.meta.verify.rej}).`;
+}
+function drawMap(){
+ if(routeL)map.removeLayer(routeL);if(route2L)map.removeLayer(route2L);anchorL.clearLayers();claimL.clearLayers();
+ routeL=L.polyline(T.route,{color:'#6ea8ff',weight:mode==1?6:3,opacity:mode==1?.9:.35}).addTo(map);
+ route2L=L.polyline(T.route2,{color:'#c77dff',weight:mode==2?6:3,opacity:mode==2?.9:.35}).addTo(map);
+ $('m1').className=mode==1?'':'alt';$('m2').className=mode==2?'':'alt';
+ T.anchors.forEach(a=>{L.circleMarker(a.latlon,{radius:6,color:a.v2?'#3ecf8e':'#f5b84b',fillColor:a.v2?'#3ecf8e':'#f5b84b',fillOpacity:.9}).bindTooltip(`${a.name} &middot; ${mmss(a.t)}`).on('click',()=>seek(a.t)).addTo(anchorL)});
+ map.fitBounds(routeL.getBounds().extend(route2L.getBounds()).pad(.15));
+ if(veh)map.removeLayer(veh);veh=L.circleMarker(curPos(0).slice(0,2),{radius:9,color:'#ef5b5b',fillColor:'#ef5b5b',fillOpacity:1,weight:3}).addTo(map);
+ $('mapnote').textContent='Blue: sign-matched route (passes through every accepted sign, but takes shortest paths between them, so it can detour). Purple: motion-consistent route (follows the turns measured by optical flow, within about 140 m of the signs, but misses some). Green: sign reads confirmed by a second, stronger model; amber: accepted but not confirmed. Red: car position at the current clip.';
+}
+function drawAnchors(){
+ let h='<table><tr><th>Time</th><th>Sign read</th><th>Reads</th><th>2nd model</th></tr>';
+ T.anchors.forEach(a=>{h+=`<tr class="click" data-t="${a.t}"><td>${mmss(a.t)}</td><td>${a.name}</td><td>${a.reads}</td><td>${a.v2?'<span class="pill ok">confirmed</span>':'<span class="pill">not confirmed</span>'}</td></tr>`});
+ h+='</table>';
+ if(T.rejected.length)h+=`<div class="note" style="margin-top:8px"><b>Rejected as inconsistent with the rest:</b> ${T.rejected.map(r=>`<span class="pill bad">${r.name} @ ${mmss(r.t)}</span>`).join('')}</div>`;
+ $('anchors').innerHTML=h;
+ $('anchors').querySelectorAll('tr.click').forEach(tr=>tr.onclick=()=>seek(+tr.dataset.t));
+}
+function drawAmb(){
+ const a=T.ambiguity,W=520,H=190,pl=36,pb=22,mx=Math.log10(7000);
+ const X=i=>pl+(a.x[i]/a.x[a.x.length-1])*(W-pl-8),Y=v=>8+(H-pb-8)*(1-Math.log10(Math.max(v,1))/mx);
+ const line=(arr,col)=>`<polyline fill="none" stroke="${col}" stroke-width="2" points="${arr.map((v,i)=>X(i)+','+Y(v)).join(' ')}"/>`;
+ let s=`<svg viewBox="0 0 ${W} ${H}" width="100%">`;
+ [1,10,100,1000].forEach(v=>{s+=`<line x1="${pl}" x2="${W-8}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--line)"/><text x="4" y="${Y(v)+4}">${v}</text>`});
+ s+=line(a.turns,'#f5b84b')+line(a.turns_tram,'#6ea8ff');
+ s+=`<circle cx="${W-10}" cy="${Y(1)}" r="5" fill="#3ecf8e"/><text x="${W-150}" y="${Y(1)-8}">+ text anchors: 1 route</text>`;
+ s+=`<text x="${pl}" y="${H-4}">0:00</text><text x="${W-40}" y="${H-4}">${mmss(a.x[a.x.length-1])}</text></svg>`;
+ s+='<div class="note"><span style="color:#f5b84b">&#9632;</span> turns only &nbsp; <span style="color:#6ea8ff">&#9632;</span> turns + tram tracks &nbsp; <span style="color:#3ecf8e">&#9679;</span> with text anchors (effective number of distinct places, log scale)</div>';
+ $('amb').innerHTML=s;
+ $('ambnote').textContent=`Turns and tram tracks alone shrink ~5,000 possible places to ${Math.round(a.turns_tram[a.turns_tram.length-1])}; signs make it unique.`;
+}
+function curPos(i){return mode==2?T.pos2[Math.min(i,T.pos2.length-1)]:T.pos[i]}
+function setSeg(i,noPlay){
+ cur=Math.max(0,Math.min(T.segs.length-1,i));$('sc').value=cur;$('clock').textContent=mmss(cur*5);
+ const v=$('v');v.src=BASE+'api/video?source='+encodeURIComponent(T.segs[cur]);v.load();if(auto&&!noPlay)v.play().catch(()=>{});
+ const p=curPos(cur);veh.setLatLng(p.slice(0,2));if(!map.getBounds().contains(p.slice(0,2)))map.panTo(p.slice(0,2));
+ const e=T.ev[cur],mv={s:'stopped',n:'normal',f:'fast'}[e.mv]||(e.mv==='s'?'slow':'normal');
+ const man={L:'turning left',R:'turning right',U:'U-turn',S:'straight'}[e.m];
+ const spd={stopped:'stopped',slow:'slow',normal:'normal',fast:'fast'};
+ $('evid').innerHTML=`<div>${e.n.length?e.n.map(x=>`<span class="pill ok">sign: ${x}</span>`).join(''):'<span class="pill">no street sign read</span>'}${(e.b||[]).map(x=>`<span class="pill">${x}</span>`).join('')}</div><div><span class="pill">${man}</span>${e.tram?'<span class="pill tram">tram tracks</span>':''}<span class="pill">${p[2]?'position held at anchor':'on matched route'}</span></div>`;
+}
+function seek(t){setSeg(Math.round(t/5),true)}
+$('m1').onclick=()=>{mode=1;drawMap();setSeg(cur,true)};$('m2').onclick=()=>{mode=2;drawMap();setSeg(cur,true)};
+$('sc').oninput=e=>setSeg(+e.target.value,true);
+$('prev').onclick=()=>setSeg(cur-1,true);$('next').onclick=()=>setSeg(cur+1,true);
+$('play').onclick=()=>{auto=!auto;$('play').textContent=auto?'Pause':'Play trip';if(auto)$('v').play().catch(()=>{});else $('v').pause()};
+$('v').addEventListener('ended',()=>{if(auto&&cur<T.segs.length-1)setSeg(cur+1)});
+// claim verification
+function seg2d(p,a,b){const k=Math.cos(p[0]*Math.PI/180),x=(q)=>[(q[1]-p[1])*111320*k,(q[0]-p[0])*110540];const A=x(a),B=x(b);const dx=B[0]-A[0],dy=B[1]-A[1];const L=dx*dx+dy*dy;let t=L?Math.max(0,Math.min(1,-(A[0]*dx+A[1]*dy)/L)):0;const cx=A[0]+t*dx,cy=A[1]+t*dy;return [Math.hypot(cx,cy),[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t]]}
+function nearest(p){const RT=mode==2?T.route2:T.route;let best=[1e9,null];for(let i=0;i<RT.length-1;i++){const r=seg2d(p,RT[i],RT[i+1]);if(r[0]<best[0])best=r}return best}
+$('ex1').onclick=()=>{$('claim').value=T.example_true||'CN Tower, Toronto'};
+$('ex2').onclick=()=>{$('claim').value='Times Square, New York'};
+$('verify').onclick=async()=>{
+ const q=$('claim').value.trim();if(!q)return;const out=$('vres');out.innerHTML='<div class="note">Looking up the claimed place...</div>';claimL.clearLayers();
+ try{const r=await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q='+encodeURIComponent(q)).then(x=>x.json());
+  if(!r.length){out.innerHTML='<div class="note">Could not find that place.</div>';return}
+  const p=[+r[0].lat,+r[0].lon],[d,np]=nearest(p);
+  const v=d<300?['Consistent with the footage','var(--ok)']:d<1000?['Nearby, but not on the matched route','var(--warn)']:['Inconsistent with the footage','var(--bad)'];
+  out.innerHTML=`<div class="verdict" style="color:${v[1]}">${v[0]}</div><div class="note">${r[0].display_name.slice(0,110)}<br>Distance from the footage-derived route: <b>${d>=1000?(d/1000).toFixed(1)+' km':Math.round(d)+' m'}</b>.</div>`;
+  L.marker(p).addTo(claimL).bindTooltip('claimed place');if(np)L.polyline([p,np],{color:'#ef5b5b',dashArray:'5 6'}).addTo(claimL);
+  map.fitBounds(L.latLngBounds([p,np||p]).extend(routeL.getBounds()).pad(.1));
+ }catch(e){out.innerHTML='<div class="note">Lookup failed (needs internet in the browser).</div>'}
+};
+</script>
+</body>
+</html>
